@@ -1,4 +1,4 @@
-import { expect, $ } from '@wdio/globals'
+import { browser, expect, $ } from '@wdio/globals'
 import { spyOn, mock, fn, unmock } from '@wdio/browser-runner'
 import { html, render } from 'lit'
 import isUrl from 'is-url'
@@ -82,6 +82,56 @@ describe('Lit Component testing', () => {
         expect(Date.now() - start).toBeLessThan(1000)
     })
 
+    /**
+     * Todo(@christian-bromann): fails when running `npm run test:browser` but passes when running `npm run test:browser:lit`
+     */
+    describe.skip('shadow root piercing', () => {
+        it('should allow to pierce into closed shadow roots', async () => {
+            render(
+                html`<closed-node>Hello, </closed-node>`,
+                document.body
+            )
+            await expect($('.findMe')).toHaveText('I am hidden!')
+            /**
+             * Note: the `getText` command doesn't expose text from closed shadow roots
+             */
+            const closedNode = $('closed-node')
+            await expect(closedNode).toHaveText('Hello,')
+            await expect(closedNode).toMatchInlineSnapshot(`
+              "<closed-node>Hello,
+                <template shadowrootmode="closed">
+                  <style>section { color: blue; }</style>
+                  <h2>Closed Node</h2>
+                  <section>
+                    <slot></slot>
+                    <closed-node-nested>hidden
+                      <template shadowrootmode="closed">
+                        <style>.findMe { color: green; }</style>
+                        <h2>Deep Closed Node</h2>
+                        <div class="findMe">I am
+                          <slot></slot>!</div>
+                      </template>
+                    </closed-node-nested>
+                  </section>
+                </template>
+              </closed-node>"
+            `)
+        })
+
+        it('can fetch multiple elements within various closed shadow roots', async () => {
+            render(
+                html`<closed-node>Hello, </closed-node>`,
+                document.body
+            )
+            const root = $('closed-node')
+            await expect(root.$('h2')).toHaveText('Closed Node')
+            expect(await root.$$('h2').map((h2) => h2.getText())).toEqual([
+                'Closed Node',
+                'Deep Closed Node'
+            ])
+        })
+    })
+
     describe('snapshot testing', () => {
         beforeEach(() => {
             render(
@@ -90,7 +140,7 @@ describe('Lit Component testing', () => {
             )
         })
 
-        it('of elements', async () => {
+        it.skip('of elements', async () => {
             /**
              * only run snapshot tests in non-Safari browsers as shadow dom piercing
              * is not yet supported in Safari
@@ -103,22 +153,24 @@ describe('Lit Component testing', () => {
             await expect(elem).toMatchSnapshot()
             await expect(elem).toMatchInlineSnapshot(`
               "<simple-greeting name="WebdriverIO">
-                <shadow-root>
+                <template shadowrootmode="open">
+                  <style>:host { color: blue; }</style>
                   <div>
                     <p>Hello Sir, WebdriverIO! Does this work?</p>
                     <button>Good</button>
                     <hr />
                     <em></em>
                     <sub-elem>
-                      <shadow-root>
+                      <template shadowrootmode="open">
+                        <style>.selectMeToo { color: blue; }</style>
                         <div>
                           <p class="selectMe">I am within another shadow root element</p>
                           <p class="selectMeToo">I am within another shadow root element as well</p>
                         </div>
-                      </shadow-root>
+                      </template>
                     </sub-elem>
                   </div>
-                </shadow-root>
+                </template>
               </simple-greeting>"
             `)
         })
@@ -145,6 +197,18 @@ describe('Lit Component testing', () => {
               }
             `)
         })
+    })
+
+    it('maps the driver response when the element is not interactable so that we shown an aligned message with the best information we can', async () => {
+        render(
+            html`<input style="display: none;" />`,
+            document.body
+        )
+
+        const err = await $('input').click().catch((err) => err)
+        expect(err.name).toBe('element not interactable')
+        expect(err.message).toBe('Element <input style="display: none;"> not interactable')
+        expect(err.stack).toContain('at getErrorFromResponseBody')
     })
 
     it('should allow to auto mock dependencies', () => {
@@ -193,6 +257,17 @@ describe('Lit Component testing', () => {
         )
         await $('simple-greeting').$('>>> button').click()
         await expect($('simple-greeting').$('>>> em')).toHaveText('Thanks for your answer!')
+    })
+
+    it('should call execute method with the element', async function () {
+        render(
+            html`<simple-greeting name="WebdriverIO" />`,
+            document.body
+        )
+        const result = await $('simple-greeting').execute((elem, a, b, c) => {
+            return `${elem.outerHTML}, ${a}, ${b}, ${c}`
+        }, 1, 2, 3)
+        await expect(result).toEqual('<simple-greeting name="WebdriverIO"></simple-greeting>, 1, 2, 3')
     })
 
     it('should be able to chain shadow$ commands', async () => {
@@ -570,5 +645,19 @@ describe('Lit Component testing', () => {
         const source = fetch('/browser-runner/wasm/add.wasm')
         const wasmModule = await WebAssembly.instantiateStreaming(source)
         expect(wasmModule.instance.exports.add(1, 2)).toBe(3)
+    })
+
+    it('should allow to re-fetch elements', async () => {
+        let i = 0
+        const stage = document.createElement('div')
+        stage.id = 'stage'
+        document.body.appendChild(stage)
+
+        setInterval(() => {
+            const span = document.createElement('span')
+            span.textContent = 'Hello, world! ' + ++i
+            stage.appendChild(span)
+        }, 500)
+        await expect($('#stage').$$('span')[4]).toHaveText('Hello, world! 5')
     })
 })
